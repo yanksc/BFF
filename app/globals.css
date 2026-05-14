@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --surface-alt: #f0f0f3;
+  --bubble-me: #2f7df0;
+  --bubble-me-text: #ffffff;
+  --bubble-them: #ececef;
+  --bubble-them-text: #111114;
+  --accent: #2f7df0;
+  --muted: #8a8a93;
+  --border: #e5e5ea;
+}
+
+.dark {
+  --bg: #0b0b0d;
+  --surface: #131316;
+  --surface-alt: #1c1c20;
+  --bubble-me: #2f7df0;
+  --bubble-me-text: #ffffff;
+  --bubble-them: #23232a;
+  --bubble-them-text: #f1f1f3;
+  --accent: #5b9bff;
+  --muted: #8a8a93;
+  --border: #26262b;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--bubble-them-text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  overscroll-behavior-y: contain;
+}
+
+/* hide native scrollbar in chat scroll area for a cleaner look */
+.scroll-quiet::-webkit-scrollbar { width: 0; height: 0; }
+.scroll-quiet { scrollbar-width: none; }
+
+/* iOS safe area helpers */
+.pb-safe { padding-bottom: max(env(safe-area-inset-bottom), 0.5rem); }
+.pt-safe { padding-top: max(env(safe-area-inset-top), 0.5rem); }
+
+/* Streaming caret */
+.caret::after {
+  content: "▍";
+  display: inline-block;
+  margin-left: 1px;
+  animation: blink 1s steps(2, start) infinite;
+  opacity: 0.7;
+}
+@keyframes blink { to { visibility: hidden; } }
