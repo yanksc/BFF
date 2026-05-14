@@ -16,5 +16,5 @@ export type OnboardingInput = z.infer<typeof OnboardingSchema>;
 
 export const ChatSchema = z.object({
   content: z.string().max(4000).default(""),
-  imageUrl: z.string().url().optional(),
+  imageUrl: z.string().url().nullable().optional(),
 });

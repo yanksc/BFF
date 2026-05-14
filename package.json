@@ -7,11 +7,13 @@
     "build": "next build",
     "start": "next start -p 9427",
     "lint": "next lint",
-    "db:init": "psql \"$POSTGRES_URL\" -f db/schema.sql"
+    "db:init": "node -r dotenv/config scripts/db-init.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.96.0",
     "@neondatabase/serverless": "^0.10.4",
     "@vercel/blob": "^0.27.0",
+    "ai": "^6.0.182",
     "clsx": "^2.1.1",
     "framer-motion": "^11.11.0",
     "iron-session": "^8.0.4",
@@ -27,6 +29,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "autoprefixer": "^10.4.20",
+    "dotenv": "^17.4.2",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3"

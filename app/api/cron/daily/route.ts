@@ -36,7 +36,10 @@ export async function GET(req: Request) {
       userMessage: { role: "user", content: "" },
       mode: "daily",
     });
-    for await (const chunk of iter) text += chunk;
+    for await (const part of iter) {
+      if (part.type === "text") text += part.text;
+      // Ignore bubble_break and selfie_call in daily nudge mode — flatten to one message.
+    }
 
     await insertMessage({
       id: nanoid(),

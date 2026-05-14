@@ -6,8 +6,13 @@ create table if not exists users (
   fitness_goal text not null,
   workout_frequency text not null,
   tone text not null,
+  canonical_selfie_url text,
   created_at timestamptz not null default now()
 );
+-- migrations for existing dbs:
+alter table users add column if not exists canonical_selfie_url text;
+alter table users add column if not exists memory_summary text;
+alter table users add column if not exists summary_last_message_at timestamptz;
 
 create table if not exists messages (
   id text primary key,

@@ -28,6 +28,9 @@ export type UserProfile = {
   fitness_goal: string;
   workout_frequency: string;
   tone: string;
+  canonical_selfie_url: string | null;
+  memory_summary: string | null;
+  summary_last_message_at: string | null;
   created_at: string;
 };
 
@@ -53,7 +56,9 @@ export async function getUser(id: string): Promise<UserProfile | null> {
   return rows[0] ?? null;
 }
 
-export async function insertUser(u: Omit<UserProfile, "created_at">) {
+export async function insertUser(
+  u: Omit<UserProfile, "created_at" | "canonical_selfie_url" | "memory_summary" | "summary_last_message_at">
+) {
   const sql = getSql();
   await sql`
     insert into users (id, name, companion_name, companion_gender, fitness_goal, workout_frequency, tone)
@@ -117,4 +122,71 @@ export async function listAllUserIds(): Promise<string[]> {
   const sql = getSql();
   const rows = (await sql`select id from users`) as { id: string }[];
   return rows.map((r) => r.id);
+}
+
+export async function setCanonicalSelfie(userId: string, url: string) {
+  const sql = getSql();
+  await sql`update users set canonical_selfie_url = ${url} where id = ${userId}`;
+}
+
+export async function setMemorySummary(userId: string, summary: string, throughCreatedAt: string) {
+  const sql = getSql();
+  await sql`
+    update users
+    set memory_summary = ${summary},
+        summary_last_message_at = ${throughCreatedAt}
+    where id = ${userId}
+  `;
+}
+
+// Returns messages newer than the given timestamp (inclusive of a small floor for null),
+// oldest-first, capped at `limit`. Used to gather the slice of conversation that needs
+// to be folded into the rolling summary.
+export async function getMessagesSince(
+  userId: string,
+  since: string | null,
+  limit = 50
+): Promise<MessageRow[]> {
+  const sql = getSql();
+  const cap = Math.min(limit, 200);
+  if (since) {
+    const rows = (await sql`
+      select * from messages
+      where user_id = ${userId} and created_at > ${since}
+      order by created_at asc
+      limit ${cap}
+    `) as MessageRow[];
+    return rows;
+  }
+  const rows = (await sql`
+    select * from messages
+    where user_id = ${userId}
+    order by created_at asc
+    limit ${cap}
+  `) as MessageRow[];
+  return rows;
+}
+
+export async function countMessagesSince(userId: string, since: string | null): Promise<number> {
+  const sql = getSql();
+  if (since) {
+    const rows = (await sql`
+      select count(*)::int as n from messages
+      where user_id = ${userId} and created_at > ${since}
+    `) as { n: number }[];
+    return rows[0]?.n ?? 0;
+  }
+  const rows = (await sql`select count(*)::int as n from messages where user_id = ${userId}`) as { n: number }[];
+  return rows[0]?.n ?? 0;
+}
+
+export async function deleteMessages(ids: string[]) {
+  if (ids.length === 0) return;
+  const sql = getSql();
+  await sql`delete from messages where id = any(${ids})`;
+}
+
+export async function updateMessageImageUrl(id: string, imageUrl: string) {
+  const sql = getSql();
+  await sql`update messages set image_url = ${imageUrl} where id = ${id}`;
 }

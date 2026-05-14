@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Composer } from "@/components/Composer";
 import { MessageList } from "@/components/MessageList";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -22,18 +22,25 @@ export function ChatClient({
   userName: string;
 }) {
   const [messages, setMessages] = useState<UIMessage[]>(initialMessages);
-  const [streaming, setStreaming] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [typing, setTyping] = useState(false);
+  // Holds the controller for the in-flight /api/chat fetch so a fresh send can abort it.
+  const inFlightAbortRef = useRef<AbortController | null>(null);
 
   const send = useCallback(
     async ({ content, imageFile }: { content: string; imageFile?: File | null }) => {
-      if (streaming) return;
+      // Allow concurrent sends: if a reply is already streaming, abort it and start fresh.
+      if (inFlightAbortRef.current) {
+        inFlightAbortRef.current.abort();
+      }
 
       let imageUrl: string | null = null;
       const localPreview = imageFile ? URL.createObjectURL(imageFile) : null;
 
       const userTmpId = tempId();
       const now = new Date().toISOString();
+      // The user's bubble is considered "sent" the instant they hit send. We've already
+      // queued the fetch — no pending faded state. The optimistic insert is durable.
       setMessages((prev) => [
         ...prev,
         {
@@ -42,14 +49,18 @@ export function ChatClient({
           content,
           imageUrl: localPreview,
           createdAt: now,
-          pending: true,
         },
       ]);
-      setStreaming(true);
+      // Show the typing indicator immediately so the user knows we're working.
+      // The server will keep toggling it on/off via SSE `typing` events for finer pacing.
       setTyping(true);
+
+      const ac = new AbortController();
+      inFlightAbortRef.current = ac;
 
       try {
         if (imageFile) {
+          setUploading(true);
           const fd = new FormData();
           fd.append("file", imageFile);
           const up = await fetch("/api/upload", { method: "POST", body: fd });
@@ -62,20 +73,20 @@ export function ChatClient({
             )
           );
           if (localPreview) URL.revokeObjectURL(localPreview);
+          setUploading(false);
         }
 
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ content, imageUrl }),
+          body: JSON.stringify({ content, ...(imageUrl ? { imageUrl } : {}) }),
+          signal: ac.signal,
         });
         if (!res.ok || !res.body) throw new Error("chat failed");
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = "";
-        const assistantTmpId = tempId();
-        let started = false;
 
         while (true) {
           const { value, done } = await reader.read();
@@ -92,10 +103,17 @@ export function ChatClient({
             let evt: {
               start?: boolean;
               userMessageId?: string;
-              delta?: string;
               done?: boolean;
-              messageId?: string;
               error?: string;
+              typing?: boolean;
+              generatingImage?: boolean;
+              selfie?: boolean;
+              imageReplaced?: boolean;
+              imageUrl?: string;
+              imageMessageId?: string;
+              bubble?: boolean;
+              id?: string;
+              text?: string;
             };
             try {
               evt = JSON.parse(payload);
@@ -104,65 +122,81 @@ export function ChatClient({
             }
 
             if (evt.start) {
+              // Server confirms the user message is in. Patch the real id onto the optimistic bubble.
               setMessages((prev) =>
                 prev.map((m) =>
-                  m.id === userTmpId
-                    ? { ...m, id: evt.userMessageId ?? m.id, pending: false }
-                    : m
+                  m.id === userTmpId ? { ...m, id: evt.userMessageId ?? m.id } : m
                 )
               );
-            } else if (typeof evt.delta === "string") {
-              if (!started) {
-                started = true;
-                setTyping(false);
-                setMessages((prev) => [
-                  ...prev,
-                  {
-                    id: assistantTmpId,
-                    role: "assistant",
-                    content: evt.delta!,
-                    createdAt: new Date().toISOString(),
-                    streaming: true,
-                  },
-                ]);
-              } else {
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantTmpId
-                      ? { ...m, content: m.content + evt.delta! }
-                      : m
-                  )
-                );
-              }
+            } else if (evt.typing === true || evt.generatingImage) {
+              setTyping(true);
+            } else if (evt.typing === false) {
+              setTyping(false);
+            } else if (evt.bubble && typeof evt.text === "string") {
+              // Whole bubble arrives at once. Insert as a new assistant message; CSS handles fade-in.
+              setTyping(false);
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: evt.id ?? tempId(),
+                  role: "assistant" as const,
+                  content: evt.text!,
+                  createdAt: new Date().toISOString(),
+                },
+              ]);
+            } else if (evt.selfie && evt.imageUrl) {
+              setTyping(false);
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: evt.imageMessageId ?? tempId(),
+                  role: "assistant" as const,
+                  content: "",
+                  imageUrl: evt.imageUrl,
+                  createdAt: new Date().toISOString(),
+                },
+              ]);
+            } else if (evt.imageReplaced && evt.imageMessageId && evt.imageUrl) {
+              // Background Blob upload finished — swap the ephemeral xAI URL for the durable one.
+              const id = evt.imageMessageId;
+              const url = evt.imageUrl;
+              setMessages((prev) =>
+                prev.map((m) => (m.id === id ? { ...m, imageUrl: url } : m))
+              );
             } else if (evt.done) {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantTmpId
-                    ? { ...m, id: evt.messageId ?? m.id, streaming: false }
-                    : m
-                )
-              );
+              setTyping(false);
             } else if (evt.error) {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantTmpId
-                    ? { ...m, content: m.content + "\n(connection lost)", streaming: false }
-                    : m
-                )
-              );
+              console.error("[chat] server error:", evt.error);
+              setTyping(false);
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: tempId(),
+                  role: "assistant" as const,
+                  content: `Error: ${evt.error}`,
+                  createdAt: new Date().toISOString(),
+                },
+              ]);
             }
           }
         }
-      } catch {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === userTmpId ? { ...m, pending: false } : m))
-        );
+      } catch (err) {
+        // AbortError just means a newer send superseded this one — silent.
+        if ((err as Error)?.name !== "AbortError") {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === userTmpId ? { ...m, pending: false } : m))
+          );
+        }
       } finally {
-        setStreaming(false);
-        setTyping(false);
+        // Only clear typing/inFlight if this fetch was the active one.
+        // (A newer send may have replaced inFlightAbortRef already.)
+        if (inFlightAbortRef.current === ac) {
+          inFlightAbortRef.current = null;
+          setTyping(false);
+        }
       }
     },
-    [streaming]
+    []
   );
 
   return (
@@ -179,7 +213,7 @@ export function ChatClient({
       </header>
 
       <MessageList messages={messages} typing={typing} />
-      <Composer onSend={send} disabled={streaming} />
+      <Composer onSend={send} disabled={uploading} />
     </div>
   );
 }
